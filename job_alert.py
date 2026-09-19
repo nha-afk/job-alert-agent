@@ -212,6 +212,13 @@ def fetch_jooble(session: requests.Session, term: str, loc: dict, max_age_h: int
 
 
 SOURCES = {"LinkedIn": fetch_linkedin, "Adzuna": fetch_adzuna, "Jooble": fetch_jooble}
+SOURCE_KEYS = {"Adzuna": ("ADZUNA_APP_ID", "ADZUNA_APP_KEY"), "Jooble": ("JOOBLE_API_KEY",)}
+
+
+def enabled_sources() -> dict:
+    """Sources utilisables : celles qui ne demandent pas de clé, ou dont les clés sont définies."""
+    return {name: fetch for name, fetch in SOURCES.items()
+            if all(os.getenv(k) for k in SOURCE_KEYS.get(name, ()))}
 
 
 class DescriptionFetcher:
@@ -421,12 +428,13 @@ def collect(session: requests.Session, cfg: dict) -> tuple[list[Job], list[str]]
     """Interroge toutes les sources. Renvoie les offres brutes et la liste des sources bloquées."""
     max_age_h = int(cfg.get("max_age_hours", 3))
     found: dict[str, Job] = {}
-    stats = {name: {"ok": 0, "failed": 0} for name in SOURCES}
+    sources = enabled_sources()
+    stats = {name: {"ok": 0, "failed": 0} for name in sources}
     blocked: set[str] = set()
 
     for loc in cfg["locations"]:
         terms = cfg["search_terms"] + loc.get("extra_terms", [])
-        for name, fetch in SOURCES.items():
+        for name, fetch in sources.items():
             if name in blocked:
                 continue
             # LinkedIn : une seule requête combinée par ville, pour limiter le nombre d'appels.
