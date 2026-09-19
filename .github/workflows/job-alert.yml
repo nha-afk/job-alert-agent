@@ -1,0 +1,48 @@
+name: Job alerts
+
+on:
+  schedule:
+    - cron: "*/30 * * * *" # toutes les 30 minutes (GitHub peut retarder de quelques minutes)
+  workflow_dispatch: # bouton "Run workflow" pour lancer à la main
+
+concurrency:
+  group: job-alert
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      # Mémoire des offres déjà envoyées (évite les doublons d'un passage à l'autre)
+      - name: Restore seen jobs
+        uses: actions/cache/restore@v4
+        with:
+          path: seen_jobs.json
+          key: seen-jobs-${{ github.run_id }}
+          restore-keys: seen-jobs-
+
+      - name: Search and notify
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          ADZUNA_APP_ID: ${{ secrets.ADZUNA_APP_ID }}
+          ADZUNA_APP_KEY: ${{ secrets.ADZUNA_APP_KEY }}
+          JOOBLE_API_KEY: ${{ secrets.JOOBLE_API_KEY }}
+        run: python job_alert.py
+
+      - name: Save seen jobs
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: seen_jobs.json
+          key: seen-jobs-${{ github.run_id }}

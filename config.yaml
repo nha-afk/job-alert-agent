@@ -1,0 +1,188 @@
+# ------------------------------------------------------------------
+# Configuration de l'agent d'alertes emploi
+# Cible : Investment Analyst / Associate en INFRASTRUCTURE
+#   (fonds d'infrastructure, équipes infra des fonds souverains,
+#    banques d'investissement, toute équipe d'investissement infra)
+# ------------------------------------------------------------------
+
+# Ne garder que les offres publiées il y a moins de N heures.
+# L'agent tourne toutes les ~30 min ; une fenêtre de 3 h absorbe les retards
+# de GitHub Actions. Les doublons sont éliminés grâce à seen_jobs.json.
+max_age_hours: 3
+
+# Nombre maximal de descriptions LinkedIn lues par passage (pour les intitulés ambigus).
+# Les offres non évaluées faute de quota le seront au passage suivant.
+max_description_fetches: 30
+
+# Recherches lancées pour chaque ville.
+# Sur LinkedIn, elles sont combinées en une seule requête "A" OR "B" OR ...
+search_terms:
+  - "infrastructure investment"
+  - "infrastructure private equity"
+  - "infrastructure associate"
+  - "infrastructure analyst"
+  - "infrastructure fund"
+  - "project finance"
+  - "real assets"
+
+# Villes surveillées.
+#   extra_terms : recherches supplémentaires propres à la ville (ex. intitulés en français)
+#   linkedin : libellé de lieu reconnu par LinkedIn
+#   adzuna   : code pays Adzuna (gb, fr, za… ; laisser vide si non couvert)
+#   jooble   : libellé de lieu envoyé à Jooble
+locations:
+  - name: Paris
+    extra_terms: ["investissement infrastructure", "chargé d'investissement infrastructure", "financement de projets"]
+    linkedin: "Paris, Île-de-France, France"
+    adzuna: fr
+    adzuna_where: "Paris"
+    jooble: "Paris, France"
+  - name: Londres
+    linkedin: "London, England, United Kingdom"
+    adzuna: gb
+    adzuna_where: "London"
+    jooble: "London, United Kingdom"
+  - name: Casablanca
+    extra_terms: ["investissement infrastructure", "chargé d'investissement infrastructure", "financement de projets"]
+    linkedin: "Casablanca, Morocco"
+    jooble: "Casablanca, Morocco"
+  - name: Lagos
+    linkedin: "Lagos, Nigeria"
+    jooble: "Lagos, Nigeria"
+  - name: Cape Town
+    linkedin: "Cape Town, Western Cape, South Africa"
+    adzuna: za
+    adzuna_where: "Cape Town"
+    jooble: "Cape Town, South Africa"
+
+# ------------------------------------------------------------------
+# Filtre (expressions régulières, insensibles à la casse)
+#
+# Une offre est retenue si son intitulé contient un "role", aucun "exclude", et :
+#   - un terme "infra_strong" (ex. "Project Finance Analyst"), ou
+#   - un terme "infra" ET un terme "investment_context" (ex. "Associate, Infrastructure Investment"), ou
+#   - l'employeur est un spécialiste de l'infrastructure (liste "infra_specialists",
+#     ou nom contenant "Infra…" : InfraVia, Amber Infrastructure, InfraCo…).
+# Intitulé ambigu ("Associate, Infrastructure", "Private Equity Associate", "Associate") :
+#   l'agent lit la description et exige au moins min_description_mentions mentions
+#   de l'infrastructure ("description_infra") et/ou de l'investissement ("description_investment").
+# ------------------------------------------------------------------
+job_filter:
+  min_description_mentions: 2
+
+  role:
+    - '\banalyst\b'
+    - '\bassociate\b'
+    - '\banalyste\b'
+    - "\\bcharg[ée]e? d'(investissement|affaires)"
+    # Équivalents d'associate courants chez les DFI et fonds africains / britanniques
+    - '\binvestment (professional|executive|officer)\b'
+
+  infra_strong:
+    - '\bproject finance\b'
+    - '\bfinancement(s)? de projets?\b'
+    - '\b(PPP|PFI)\b'
+    - '\binfra(structure)?s?\s*(investment|investing|fund|funds|equity|debt|private equity|credit|finance|M&A)'
+    - '\binvestissements?\s+(en |dans les )?infrastructures?\b'
+    - '\binfrastructures?\s+(&|and|et)\s+(energy|project finance|real assets|transition)'
+
+  infra:
+    - '\binfra(structures?)?\b'
+    - '\breal assets\b'
+    - '\bactifs r[ée]els\b'
+    - '\benergy transition\b'
+    - '\btransition [ée]nerg[ée]tique\b'
+    - '\brenewables?\b'
+    - '\b[ée]nergies? renouvelables?\b'
+    - '\b(power|utilities|digital infrastructure|transport(ation)?)\b'
+
+  investment_context:
+    - 'invest'
+    - '\b(private equity|PE|buy-?out|secondar(y|ies))\b'
+    - '\b(fund|funds|fonds|portfolio|asset management|capital|sovereign|souverain)\b'
+    - '\b(M&A|deals?|transactions?|acquisitions?|origination|advisory)\b'
+    - '\b(financ\w*|credit|debt|dette|lending|equity|valuations?)\b'
+    - '\b(participations|capital[- ]investissement)\b'
+
+  description_infra:
+    - '\binfrastructures?\b'
+    - '\bproject finance\b'
+    - '\bfinancement(s)? de projets?\b'
+    - '\breal assets\b'
+    - '\bactifs r[ée]els\b'
+    - '\b(PPP|PFI)\b'
+
+  description_investment:
+    - 'invest'
+    - '\b(fund|funds|fonds)\b'
+    - '\bprivate equity\b'
+    - '\bdue diligence\b'
+    - '\b(transactions?|M&A|deals?)\b'
+    - '\bfinancial model'
+    - '\bmod[èe]le financier\b'
+    - '\bportfolio\b'
+
+  # Investisseurs spécialisés en infrastructure : tout poste d'analyst/associate chez eux est retenu.
+  # (Les acteurs multi-stratégies - KKR, Ardian, fonds souverains, banques - sont évalués via
+  #  l'intitulé ou la description, pour ne pas remonter leurs postes hors infrastructure.)
+  infra_specialists:
+    # Europe
+    - Meridiam
+    - Antin
+    - Vauban Infrastructure
+    - InfraVia
+    - Infranity
+    - DIF Capital Partners
+    - Cube Infrastructure
+    - RGreen Invest
+    - EDF Invest
+    - Marguerite
+    - Amber Infrastructure
+    - Equitix
+    - InfraRed Capital
+    - Ancala
+    - Arcus Infrastructure
+    - Arjun Infrastructure
+    - Asterion
+    - John Laing
+    - 3i Infrastructure
+    - HICL
+    - Igneo
+    - Copenhagen Infrastructure Partners
+    - Stonepeak
+    - Global Infrastructure Partners
+    - I Squared Capital
+    - Actis
+    # Afrique
+    - Africa50
+    - African Infrastructure Investment Managers
+    - AIIM
+    - Harith
+    - ARM-Harith
+    - InfraCo Africa
+    - PIDG
+    - Private Infrastructure Development Group
+    - InfraCredit
+    - Africa Finance Corporation
+    - Revego
+
+  exclude:
+    - '\bintern(ship)?\b'
+    - '\bstage\b'
+    - '\bstagiaire\b'
+    - '\balternan(ce|t)\b'
+    - '\bapprenti'
+    - '\bsales associate\b'
+    - '\b(retail|store|customer|warehouse)\b'
+    - '\b(paralegal|legal|lawyer|avocat)\b'
+    - '\b(software|developer|engineer|ing[ée]nieur)\b'
+    - '(?-i:\bIT\b)'
+    - '\b(cloud|network|devops|cyber|security|s[ée]curit[ée]|helpdesk|service desk|database|linux|windows|azure|aws|sysadmin|end user)\b'
+    - '\b(technical|technique|support|systems?|platform)\b'
+    - '\b(data|business) analyst\b'
+    - '\b(quantity surveyor|estimator|planner|site)\b'
+    - '\b(marketing|HR|human resources|recruit)'
+    - '\b(KYC|AML|compliance|audit|assurance|tax|payroll)\b'
+    - '\b(trading|trader|crypto\w*|sports|cash management|account analyst)\b'
+    - '\b(investor services|managing associate|relationship manager|FP&A)\b'
+    - '\b(vice president|VP|director|directeur|partner|head of)\b'
