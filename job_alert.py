@@ -45,6 +45,14 @@ STATE_PATH = ROOT / "seen_jobs.json"
 STATE_RETENTION_DAYS = 30
 MAX_MESSAGES_PER_RUN = 25
 ERROR_ALERT_INTERVAL = timedelta(hours=24)
+REPORT_HOUR = 8  # heure (Paris) d'envoi du rapport quotidien
+
+try:
+    from zoneinfo import ZoneInfo
+
+    PARIS = ZoneInfo("Europe/Paris")
+except Exception:  # Windows sans le paquet tzdata : heure d'hiver approximative
+    PARIS = timezone(timedelta(hours=1))
 
 
 def _load_dotenv(path: Path) -> None:
@@ -476,6 +484,42 @@ def _alert_once(state: dict, now: str, dry_run: bool, text: str) -> None:
     save_state(state)
 
 
+def record_run(state: dict, *, found: int = 0, evaluated: int = 0, sent: int = 0, failed: bool = False) -> None:
+    """Cumule les statistiques du jour. Au premier passage après REPORT_HOUR (heure de Paris),
+    envoie le bilan de la veille : c'est la preuve quotidienne que l'agent tourne."""
+    now_local = datetime.now(PARIS)
+    today = now_local.date().isoformat()
+    day = state.get("daily")
+    if day and day["date"] != today and now_local.hour >= REPORT_HOUR:
+        send_telegram(_format_report(day))
+        day = None
+    if not day:
+        day = {"date": today, "runs": 0, "failures": 0, "found": 0, "evaluated": 0, "sent": 0}
+    day["runs"] += 1
+    day["failures"] += int(failed)
+    day["found"] += found
+    day["evaluated"] += evaluated
+    day["sent"] += sent
+    state["daily"] = day
+
+
+def _format_report(day: dict) -> str:
+    healthy = day["failures"] == 0 and day["runs"] >= 24
+    date = datetime.fromisoformat(day["date"]).strftime("%d/%m/%Y")
+    lines = [
+        f"📊 <b>Rapport quotidien du {date}</b>",
+        ("✅ L'agent fonctionne normalement" if healthy else "⚠️ L'agent a rencontré des difficultés")
+        + f" : {day['runs']} passages (environ 48 attendus).",
+        f"🔎 {day['found']} offres parcourues, {day['evaluated']} nouvelles offres évaluées.",
+        f"🏗️ {day['sent']} alerte(s) envoyée(s).",
+    ]
+    if day["failures"]:
+        lines.append(f"❌ {day['failures']} passage(s) en échec : voir l'onglet Actions sur GitHub.")
+    if day["runs"] < 24:
+        lines.append("ℹ️ Moins de passages que prévu : GitHub a pu retarder ou suspendre les exécutions.")
+    return "\n".join(lines)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--dry-run", action="store_true", help="n'envoie rien et n'enregistre pas l'état")
@@ -507,6 +551,9 @@ def main() -> int:
         log(str(exc))
         _alert_once(state, now, args.dry_run, "⚠️ Agent d'alertes emploi : aucune source n'a répondu "
                     "lors du dernier passage. Consultez les logs si cela persiste.")
+        if not args.dry_run:
+            record_run(state, failed=True)
+            save_state(state)
         return 1
     if failing:
         _alert_once(state, now, args.dry_run, f"⚠️ Agent d'alertes emploi : source(s) bloquée(s) ou en "
@@ -552,6 +599,7 @@ def main() -> int:
             seen[job.key] = now
         for job in new_jobs:
             seen[job.fingerprint] = now
+        record_run(state, found=len(jobs), evaluated=len(decided), sent=len(new_jobs))
         save_state(state)
     return 0
 
