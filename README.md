@@ -129,14 +129,19 @@ schtasks /Create /SC HOURLY /TN "JobAlert" /TR "python C:\Users\natha\Documents\
   - `infra_specialists` : ajoutez les fonds infra que vous ciblez. Tout poste d'analyst / associate chez eux sera retenu.
   - `exclude` : retirez par exemple `director` si vous visez aussi des postes plus seniors.
   - `min_description_mentions` : augmentez cette valeur pour être plus strict sur les annonces ambiguës.
-- `max_age_hours` : l'ancienneté maximale d'une offre, en heures.
+- `max_age_hours` : l'ancienneté maximale d'une offre, en heures. À ne pas réduire : voir « Délai réel » ci-dessous.
 
 ## Bon à savoir
 
-- **Délai** : c'est un système de surveillance périodique, pas du temps réel. Comptez 1 h à 1 h 15
-  entre la publication et l'alerte, car GitHub décale parfois les exécutions planifiées.
-  Accélérer le rythme dans `.github/workflows/job-alert.yml` expose davantage au blocage par LinkedIn :
-  c'est précisément ce qui s'est produit avec un passage toutes les 30 minutes.
+- **Délai réel : plusieurs heures, pas une heure.** Le cron demande un passage par heure, mais
+  GitHub Actions **abandonne la plupart des exécutions planifiées** sur les comptes gratuits :
+  elles sont en priorité basse et sautées en période de charge. Constaté sur ce dépôt en
+  novembre 2026 : **3 à 5 passages par jour** au lieu de 48, à des horaires imprévisibles, avec
+  des écarts dépassant 8 h. C'est pourquoi `max_age_hours` vaut 14 : la fenêtre doit absorber
+  ces trous, sans quoi des offres sont définitivement manquées.
+  Accélérer le cron n'y change rien — GitHub n'en exécutera pas davantage — et expose en prime
+  au blocage par LinkedIn. **Pour un rythme fiable, le Planificateur de tâches Windows
+  (section 4) tient l'horaire bien mieux que GitHub**, au prix d'un PC allumé.
 - **Limites de LinkedIn** : depuis fin 2026, LinkedIn coupe après quelques dizaines de requêtes, y
   compris depuis une connexion personnelle, et plus vite encore depuis les serveurs de GitHub.
   Trois réglages atténuent ce problème :

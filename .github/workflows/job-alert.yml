@@ -14,7 +14,8 @@ concurrency:
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Les pauses anti-blocage et les reprises après 429 allongent le passage (~15 min au pire).
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
 

@@ -46,7 +46,10 @@ STATE_RETENTION_DAYS = 30
 MAX_MESSAGES_PER_RUN = 25
 ERROR_ALERT_INTERVAL = timedelta(hours=24)
 REPORT_HOUR = 8  # heure (Paris) d'envoi du rapport quotidien
-EXPECTED_RUNS_PER_DAY = 24  # doit suivre le cron de .github/workflows/job-alert.yml
+# Le cron demande 24 passages par jour, mais GitHub Actions en abandonne la plupart sur
+# les comptes gratuits (3 à 5 par jour en pratique). On n'alerte donc qu'en dessous d'un
+# seuil réellement anormal, sans quoi le rapport quotidien crierait au loup chaque matin.
+MIN_HEALTHY_RUNS_PER_DAY = 3
 
 try:
     from zoneinfo import ZoneInfo
@@ -594,13 +597,13 @@ def record_run(state: dict, *, found: int = 0, evaluated: int = 0, sent: int = 0
 
 def _format_report(day: dict) -> str:
     day = {c: day.get(c, 0) for c in DAILY_COUNTERS} | {"date": day["date"]}
-    enough = day["runs"] >= EXPECTED_RUNS_PER_DAY * 0.8
+    enough = day["runs"] >= MIN_HEALTHY_RUNS_PER_DAY
     healthy = day["failures"] == 0 and day["blocked"] == 0 and enough
     date = datetime.fromisoformat(day["date"]).strftime("%d/%m/%Y")
     lines = [
         f"📊 <b>Rapport quotidien du {date}</b>",
         ("✅ L'agent fonctionne normalement" if healthy else "⚠️ L'agent a rencontré des difficultés")
-        + f" : {day['runs']} passages ({EXPECTED_RUNS_PER_DAY} attendus).",
+        + f" : {day['runs']} passages.",
         f"🔎 {day['found']} offres parcourues, {day['evaluated']} nouvelles offres évaluées.",
         f"🏗️ {day['sent']} alerte(s) envoyée(s).",
     ]
@@ -610,7 +613,8 @@ def _format_report(day: dict) -> str:
         lines.append(f"🚧 {day['blocked']} passage(s) où une source a coupé en cours de route : "
                      "la couverture de ces passages est partielle.")
     if not enough:
-        lines.append("ℹ️ Moins de passages que prévu : GitHub a pu retarder ou suspendre les exécutions.")
+        lines.append(f"ℹ️ Moins de {MIN_HEALTHY_RUNS_PER_DAY} passages : GitHub a pu suspendre les exécutions "
+                     "planifiées (onglet Actions, bouton « Enable workflow »).")
     return "\n".join(lines)
 
 

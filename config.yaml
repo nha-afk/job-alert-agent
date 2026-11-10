@@ -6,14 +6,17 @@
 # ------------------------------------------------------------------
 
 # Ne garder que les offres publiées il y a moins de N heures.
-# L'agent tourne toutes les heures, mais l'ordre des villes tourne : si LinkedIn coupe
-# tôt dans un passage, une ville donnée peut n'être revue que 5 h plus tard. Une fenêtre
-# de 8 h couvre ce cas sans rien manquer ; les doublons sont éliminés par seen_jobs.json.
-max_age_hours: 8
+# Cette fenêtre est large à dessein. GitHub Actions abandonne la plupart des exécutions
+# planifiées des comptes gratuits : en pratique l'agent ne tourne que 3 à 5 fois par jour,
+# avec des écarts pouvant dépasser 8 h. S'y ajoute la rotation des villes. Une fenêtre de
+# 14 h absorbe ces trous ; les doublons sont de toute façon éliminés par seen_jobs.json.
+max_age_hours: 14
 
 # Nombre maximal de descriptions LinkedIn lues par passage (pour les intitulés ambigus).
-# Les offres non évaluées faute de quota le seront au passage suivant.
-max_description_fetches: 12
+# Les passages étant espacés de plusieurs heures, les compteurs de LinkedIn ont le temps de
+# se réinitialiser : on peut en lire davantage à chaque fois, ce qui compte d'autant plus
+# que les passages sont rares. Les offres non évaluées le seront au passage suivant.
+max_description_fetches: 20
 
 # Recherches lancées pour chaque ville.
 # Sur LinkedIn, elles sont combinées en une seule requête "A" OR "B" OR ...
