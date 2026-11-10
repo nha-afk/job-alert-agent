@@ -46,6 +46,7 @@ STATE_RETENTION_DAYS = 30
 MAX_MESSAGES_PER_RUN = 25
 ERROR_ALERT_INTERVAL = timedelta(hours=24)
 REPORT_HOUR = 8  # heure (Paris) d'envoi du rapport quotidien
+EXPECTED_RUNS_PER_DAY = 24  # doit suivre le cron de .github/workflows/job-alert.yml
 
 try:
     from zoneinfo import ZoneInfo
@@ -183,10 +184,19 @@ def fetch_adzuna(session: requests.Session, term: str, loc: dict, max_age_h: int
     return jobs
 
 
+def _jooble_credentials(loc: dict) -> tuple[str, str] | None:
+    """Jooble délivre une clé par pays, sur un domaine régional distinct : une clé obtenue
+    sur fr.jooble.org ne donne accès qu'aux offres françaises. Renvoie (domaine, clé)."""
+    domain = loc.get("jooble_domain")
+    key = os.getenv(f"JOOBLE_API_KEY_{domain.upper()}") if domain else None
+    return (domain, key) if key else None
+
+
 def fetch_jooble(session: requests.Session, term: str, loc: dict, max_age_h: int) -> list[Job]:
-    api_key = os.getenv("JOOBLE_API_KEY")
-    if not (api_key and loc.get("jooble")):
+    creds = _jooble_credentials(loc)
+    if not (creds and loc.get("jooble")):
         return []
+    domain, api_key = creds
     cutoff = datetime.now(timezone.utc) - timedelta(hours=max_age_h)
     body = {
         "keywords": term,
@@ -194,7 +204,7 @@ def fetch_jooble(session: requests.Session, term: str, loc: dict, max_age_h: int
         "datecreatedfrom": (cutoff - timedelta(days=1)).strftime("%Y-%m-%d"),
         "page": "1",
     }
-    resp = session.post(f"https://jooble.org/api/{api_key}", json=body, timeout=30)
+    resp = session.post(f"https://{domain}.jooble.org/api/{api_key}", json=body, timeout=30)
     resp.raise_for_status()
     jobs = []
     for r in resp.json().get("jobs", []):
@@ -220,13 +230,18 @@ def fetch_jooble(session: requests.Session, term: str, loc: dict, max_age_h: int
 
 
 SOURCES = {"LinkedIn": fetch_linkedin, "Adzuna": fetch_adzuna, "Jooble": fetch_jooble}
-SOURCE_KEYS = {"Adzuna": ("ADZUNA_APP_ID", "ADZUNA_APP_KEY"), "Jooble": ("JOOBLE_API_KEY",)}
+SOURCE_KEYS = {"Adzuna": ("ADZUNA_APP_ID", "ADZUNA_APP_KEY")}
+
+
+def _source_available(name: str) -> bool:
+    if name == "Jooble":  # au moins une clé régionale (JOOBLE_API_KEY_FR, _UK...)
+        return any(k.startswith("JOOBLE_API_KEY_") and v for k, v in os.environ.items())
+    return all(os.getenv(k) for k in SOURCE_KEYS.get(name, ()))
 
 
 def enabled_sources() -> dict:
     """Sources utilisables : celles qui ne demandent pas de clé, ou dont les clés sont définies."""
-    return {name: fetch for name, fetch in SOURCES.items()
-            if all(os.getenv(k) for k in SOURCE_KEYS.get(name, ()))}
+    return {name: fetch for name, fetch in SOURCES.items() if _source_available(name)}
 
 
 class DescriptionFetcher:
@@ -243,20 +258,31 @@ class DescriptionFetcher:
         if self.blocked or self.count >= self.limit:
             return None
         self.count += 1
-        _pause()
-        try:
-            resp = self.session.get(LINKEDIN_POSTING_URL.format(job_id=job.job_id),
-                                    headers={"User-Agent": BROWSER_UA}, timeout=30)
-        except requests.RequestException as exc:
-            log(f"  Description indisponible ({job.job_id}) : {exc}")
-            return None
-        if resp.status_code == 404:  # offre retirée entre-temps
-            return ""
-        if not resp.ok:
+        # LinkedIn limite fortement cet endpoint : on patiente plutôt que d'abandonner
+        # au premier 429, comme le fait déjà la recherche.
+        for attempt in range(1, 4):
+            _pause()
+            try:
+                resp = self.session.get(LINKEDIN_POSTING_URL.format(job_id=job.job_id),
+                                        headers={"User-Agent": BROWSER_UA}, timeout=30)
+            except requests.RequestException as exc:
+                log(f"  Description indisponible ({job.job_id}) : {exc}")
+                return None
+            if resp.status_code == 404:  # offre retirée entre-temps
+                return ""
+            if resp.ok:
+                return _text(BeautifulSoup(resp.text, "html.parser"), ".show-more-less-html__markup")
+            if resp.status_code == 429 and attempt < 3:
+                wait = 15 * attempt
+                log(f"  Description {job.job_id} : HTTP 429, nouvel essai dans {wait}s")
+                time.sleep(wait)
+                continue
             log(f"  Description indisponible ({job.job_id}) : HTTP {resp.status_code}")
             self.blocked = resp.status_code in (403, 429)
+            if self.blocked:
+                log("  Lecture des annonces suspendue pour ce passage.")
             return None
-        return _text(BeautifulSoup(resp.text, "html.parser"), ".show-more-less-html__markup")
+        return None
 
 
 def _get_with_retry(session, url, *, params=None, headers=None, attempts=3) -> requests.Response:
@@ -274,8 +300,13 @@ def _get_with_retry(session, url, *, params=None, headers=None, attempts=3) -> r
 
 
 def _pause() -> None:
-    """Pause aléatoire entre deux requêtes LinkedIn, pour ne pas être bloqué."""
-    time.sleep(random.uniform(2.5, 5))
+    """Pause aléatoire entre deux requêtes LinkedIn, pour ne pas être bloqué.
+
+    LinkedIn a durci ses limites fin 2026 : un rythme plus lent évite la coupure en
+    cours de passage. Ajustable via la variable d'environnement LINKEDIN_PAUSE_SECONDS.
+    """
+    base = float(os.getenv("LINKEDIN_PAUSE_SECONDS", "6"))
+    time.sleep(random.uniform(base, base * 1.8))
 
 
 def _text(node, selector: str) -> str:
@@ -315,6 +346,8 @@ class InfraFilter:
 
     BARE_ROLE = re.compile(r"^\W*((senior|junior|sr|jr)\W+)?(analyst|associate|analyste)(\W+(i{1,3}|[1-3]))?\W*$", re.I)
     COMPANY_INFRA = re.compile(r"\binfra")
+    # « (Base in Beijing) », « based in Dubai », « poste basé à Genève »...
+    BASED_IN = re.compile(r"\bbas[ée]?d?\s+(?:in|at|à|a)\s+([^,()\-–|/]+)", re.I)
 
     def __init__(self, cfg: dict):
         def compile_all(key: str) -> list[re.Pattern]:
@@ -326,6 +359,38 @@ class InfraFilter:
         self.desc_infra, self.desc_investment = compile_all("description_infra"), compile_all("description_investment")
         self.specialists = [re.compile(rf"\b{re.escape(_normalize(n))}\b") for n in cfg.get("infra_specialists", [])]
         self.min_mentions = int(cfg.get("min_description_mentions", 2))
+        self.places: set[str] = set()  # lieux acceptables, renseignés par set_places()
+
+    def set_places(self, locations: list[dict]) -> None:
+        """Mémorise les lieux surveillés (« London », « Londres », « Île-de-France »...)
+        pour repérer les intitulés annonçant un poste ailleurs."""
+        for loc in locations:
+            for value in (loc.get("name"), loc.get("adzuna_where"), loc.get("linkedin"), loc.get("jooble")):
+                for token in _normalize(value or "").split():
+                    if len(token) > 2:
+                        self.places.add(token)
+
+    def elsewhere(self, title: str) -> str | None:
+        """Détecte un intitulé qui annonce un poste dans une ville non surveillée.
+        Adzuna peut lister sous « London, UK » un poste explicitement basé à Pékin."""
+        match = self.BASED_IN.search(title)
+        if not match:
+            return None
+        place = _normalize(match.group(1))
+        if not place or any(tok and tok in place for tok in self.places):
+            return None
+        return match.group(1).strip()
+
+    def priority(self, job: Job) -> int:
+        """Ordre d'évaluation. Le budget de lecture des annonces est rare : on le dépense
+        d'abord sur les offres les plus prometteuses (0 = la plus prometteuse)."""
+        if _any(self.infra_strong, job.title) or self.is_specialist(job.company):
+            return 0  # décidé sur l'intitulé seul, aucune lecture nécessaire
+        if _any(self.infra, job.title):
+            return 1  # « Associate, Infrastructure » : très probablement pertinent
+        if _any(self.context, job.title):
+            return 2  # « Private Equity Associate » : à vérifier
+        return 3      # « Associate » tout court : le moins prometteur
 
     def is_specialist(self, company: str) -> bool:
         name = _normalize(company)
@@ -338,6 +403,9 @@ class InfraFilter:
             return False, "pas un poste d'analyst/associate"
         if _any(self.exclude, title):
             return False, "intitulé exclu"
+        ailleurs = self.elsewhere(title)
+        if ailleurs:
+            return False, f"poste basé ailleurs ({ailleurs})"
         infra_title, context_title = _any(self.infra, title), _any(self.context, title)
         if _any(self.infra_strong, title) or (infra_title and context_title):
             return True, "intitulé infrastructure"
@@ -432,21 +500,34 @@ def send_telegram(text: str) -> None:
 # Programme principal
 # ---------------------------------------------------------------------------
 
-def collect(session: requests.Session, cfg: dict) -> tuple[list[Job], list[str]]:
-    """Interroge toutes les sources. Renvoie les offres brutes et la liste des sources bloquées."""
+def collect(session: requests.Session, cfg: dict, rotation: int = 0) -> tuple[list[Job], list[str]]:
+    """Interroge toutes les sources. Renvoie les offres brutes et la liste des sources bloquées.
+
+    `rotation` décale la ville de départ à chaque passage. LinkedIn coupe souvent après
+    quelques requêtes : sans ce décalage, ce seraient toujours les mêmes villes de fin de
+    liste qui seraient sacrifiées.
+    """
     max_age_h = int(cfg.get("max_age_hours", 3))
     found: dict[str, Job] = {}
     sources = enabled_sources()
     stats = {name: {"ok": 0, "failed": 0} for name in sources}
     blocked: set[str] = set()
 
-    for loc in cfg["locations"]:
+    locations = cfg["locations"]
+    offset = rotation % len(locations) if locations else 0
+    for loc in locations[offset:] + locations[:offset]:
         terms = cfg["search_terms"] + loc.get("extra_terms", [])
         for name, fetch in sources.items():
             if name in blocked:
                 continue
-            # LinkedIn : une seule requête combinée par ville, pour limiter le nombre d'appels.
-            queries = [" OR ".join(f'"{t}"' for t in terms)] if name == "LinkedIn" else terms
+            if name == "LinkedIn":
+                # Une seule requête combinée par ville, pour limiter le nombre d'appels.
+                queries = [" OR ".join(f'"{t}"' for t in terms)]
+            elif name == "Adzuna":
+                # Adzuna facture à l'appel : liste courte et ciblée (voir adzuna_terms).
+                queries = cfg.get("adzuna_terms") or terms
+            else:
+                queries = terms
             for query in queries:
                 try:
                     jobs = fetch(session, query, loc, max_age_h)
@@ -484,7 +565,11 @@ def _alert_once(state: dict, now: str, dry_run: bool, text: str) -> None:
     save_state(state)
 
 
-def record_run(state: dict, *, found: int = 0, evaluated: int = 0, sent: int = 0, failed: bool = False) -> None:
+DAILY_COUNTERS = ("runs", "failures", "blocked", "found", "evaluated", "sent")
+
+
+def record_run(state: dict, *, found: int = 0, evaluated: int = 0, sent: int = 0,
+               failed: bool = False, blocked: bool = False) -> None:
     """Cumule les statistiques du jour. Au premier passage après REPORT_HOUR (heure de Paris),
     envoie le bilan de la veille : c'est la preuve quotidienne que l'agent tourne."""
     now_local = datetime.now(PARIS)
@@ -494,9 +579,13 @@ def record_run(state: dict, *, found: int = 0, evaluated: int = 0, sent: int = 0
         send_telegram(_format_report(day))
         day = None
     if not day:
-        day = {"date": today, "runs": 0, "failures": 0, "found": 0, "evaluated": 0, "sent": 0}
+        day = {"date": today}
+    # `setdefault` : un état écrit par une version antérieure n'a pas tous les compteurs.
+    for counter in DAILY_COUNTERS:
+        day.setdefault(counter, 0)
     day["runs"] += 1
     day["failures"] += int(failed)
+    day["blocked"] += int(blocked)
     day["found"] += found
     day["evaluated"] += evaluated
     day["sent"] += sent
@@ -504,18 +593,23 @@ def record_run(state: dict, *, found: int = 0, evaluated: int = 0, sent: int = 0
 
 
 def _format_report(day: dict) -> str:
-    healthy = day["failures"] == 0 and day["runs"] >= 24
+    day = {c: day.get(c, 0) for c in DAILY_COUNTERS} | {"date": day["date"]}
+    enough = day["runs"] >= EXPECTED_RUNS_PER_DAY * 0.8
+    healthy = day["failures"] == 0 and day["blocked"] == 0 and enough
     date = datetime.fromisoformat(day["date"]).strftime("%d/%m/%Y")
     lines = [
         f"📊 <b>Rapport quotidien du {date}</b>",
         ("✅ L'agent fonctionne normalement" if healthy else "⚠️ L'agent a rencontré des difficultés")
-        + f" : {day['runs']} passages (environ 48 attendus).",
+        + f" : {day['runs']} passages ({EXPECTED_RUNS_PER_DAY} attendus).",
         f"🔎 {day['found']} offres parcourues, {day['evaluated']} nouvelles offres évaluées.",
         f"🏗️ {day['sent']} alerte(s) envoyée(s).",
     ]
     if day["failures"]:
         lines.append(f"❌ {day['failures']} passage(s) en échec : voir l'onglet Actions sur GitHub.")
-    if day["runs"] < 24:
+    if day["blocked"]:
+        lines.append(f"🚧 {day['blocked']} passage(s) où une source a coupé en cours de route : "
+                     "la couverture de ces passages est partielle.")
+    if not enough:
         lines.append("ℹ️ Moins de passages que prévu : GitHub a pu retarder ou suspendre les exécutions.")
     return "\n".join(lines)
 
@@ -545,8 +639,11 @@ def main() -> int:
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     session = requests.Session()
 
+    rotation = int(state.get("rotation", 0))
+    state["rotation"] = rotation + 1
+
     try:
-        jobs, failing = collect(session, cfg)
+        jobs, failing = collect(session, cfg, rotation)
     except RuntimeError as exc:
         log(str(exc))
         _alert_once(state, now, args.dry_run, "⚠️ Agent d'alertes emploi : aucune source n'a répondu "
@@ -556,16 +653,22 @@ def main() -> int:
             save_state(state)
         return 1
     if failing:
+        others = [n for n in enabled_sources() if n not in failing]
+        suite = (f"Les autres sources ({', '.join(others)}) continuent."
+                 if others else
+                 "C'était la seule source active : la couverture de ce passage est partielle. "
+                 "Ajoutez une clé Adzuna ou Jooble pour ne plus dépendre de LinkedIn seul.")
         _alert_once(state, now, args.dry_run, f"⚠️ Agent d'alertes emploi : source(s) bloquée(s) ou en "
-                    f"erreur lors du dernier passage : {', '.join(failing)}. Les autres sources continuent.")
+                    f"erreur lors du dernier passage : {', '.join(failing)}. {suite}")
 
     # Chaque offre n'est évaluée qu'une fois : acceptée ou rejetée, elle est mémorisée.
     job_filter = InfraFilter(cfg.get("job_filter", {}))
+    job_filter.set_places(cfg["locations"])
     fetcher = DescriptionFetcher(session, int(cfg.get("max_description_fetches", 30)))
     unseen = [j for j in jobs if j.key not in seen]
     decided: list[Job] = []
     accepted: dict[str, Job] = {}
-    for job in sorted(unseen, key=lambda j: j.source != "LinkedIn"):
+    for job in sorted(unseen, key=lambda j: (job_filter.priority(j), j.source != "LinkedIn")):
         verdict, reason = job_filter.evaluate(job, fetcher)
         if args.verbose or (args.dry_run and verdict):
             mark = {True: "OK ", False: "-- ", None: "?? "}[verdict]
@@ -599,7 +702,8 @@ def main() -> int:
             seen[job.key] = now
         for job in new_jobs:
             seen[job.fingerprint] = now
-        record_run(state, found=len(jobs), evaluated=len(decided), sent=len(new_jobs))
+        record_run(state, found=len(jobs), evaluated=len(decided), sent=len(new_jobs),
+                   blocked=bool(failing))
         save_state(state)
     return 0
 

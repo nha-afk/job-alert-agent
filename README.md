@@ -1,6 +1,6 @@
 # Agent d'alertes emploi : Investment Analyst / Associate en infrastructure → Telegram
 
-Toutes les 30 minutes, l'agent cherche les **nouvelles offres** d'Investment Analyst / Associate
+Toutes les heures, l'agent cherche les **nouvelles offres** d'Investment Analyst / Associate
 **en investissement d'infrastructure**, publiées depuis moins de 3 h, à
 **Paris, Londres, Casablanca, Lagos et Cape Town**. Il vous envoie chaque nouvelle offre sur Telegram,
 une seule fois.
@@ -46,18 +46,40 @@ Exemple de message reçu :
 3. Dans un navigateur, ouvrez `https://api.telegram.org/bot<VOTRE_TOKEN>/getUpdates`
    et repérez `"chat":{"id": 123456789 ...}`. Ce nombre est votre `TELEGRAM_CHAT_ID`.
 
-## 2. (Optionnel) Ajouter des sources
+## 2. (Recommandé) Ajouter des sources
 
-- **Adzuna** : inscription gratuite sur <https://developer.adzuna.com>, qui fournit un `app_id` et une `app_key`.
-- **Jooble** : demande de clé gratuite sur <https://jooble.org/api/about>.
+Sans ces clés, l'agent ne repose que sur LinkedIn, qui bloque de plus en plus souvent les
+requêtes automatisées. Ces deux API sont officielles et prévues pour cet usage.
 
-Sans ces clés, l'agent fonctionne avec LinkedIn uniquement.
+**Adzuna** — <https://developer.adzuna.com/signup>
+Une seule paire de clés (`app_id` + `app_key`) couvre tous les pays. Le formulaire demande un
+nom d'organisation et un site web : indiquez votre nom et votre profil LinkedIn. Choisissez
+l'usage **« Personal job search »** — c'est la catégorie gratuite qui correspond à votre cas ;
+l'analyse commerciale et la prospection exigent un accord écrit payant. Aucune carte bancaire
+n'est demandée et la clé est délivrée immédiatement.
+
+**Jooble** — une clé **par pays**, sur le domaine du pays
+Une clé obtenue sur `jooble.org` ne donne accès qu'aux offres américaines. Pour chaque pays
+voulu, remplissez le formulaire sur son domaine ; la clé arrive **par e-mail** (pensez aux
+indésirables) :
+
+| Ville | Formulaire | Variable à renseigner |
+|---|---|---|
+| Paris | `fr.jooble.org/api/about` | `JOOBLE_API_KEY_FR` |
+| Londres | `uk.jooble.org/api/about` | `JOOBLE_API_KEY_UK` |
+| Casablanca | `ma.jooble.org/api/about` | `JOOBLE_API_KEY_MA` |
+| Lagos | `ng.jooble.org/api/about` | `JOOBLE_API_KEY_NG` |
+| Cape Town | `za.jooble.org/api/about` | `JOOBLE_API_KEY_ZA` |
+
+Ajoutez les pays un par un : une ville sans clé Jooble reste couverte par LinkedIn.
+Jooble ne publie ni ses quotas, ni ses délais, ni le détail de sa gratuité ; le formulaire du
+pays concerné fait foi.
 
 ## 3. Déployer sur GitHub Actions (gratuit, tourne même PC éteint)
 
 1. Créez un dépôt sur GitHub, **public de préférence**. Les minutes d'Actions sont illimitées
-   pour un dépôt public. En privé, le quota gratuit (2 000 min/mois) ne suffit pas pour un passage
-   toutes les 30 min. Le dépôt ne contient aucun secret : les clés restent dans les *Secrets*.
+   pour un dépôt public. En privé, le quota gratuit (2 000 min/mois) est juste suffisant pour un
+   passage par heure. Le dépôt ne contient aucun secret : les clés restent dans les *Secrets*.
 2. Envoyez-y le contenu de ce dossier :
    ```bash
    git init && git add . && git commit -m "Job alert agent" && git branch -M main
@@ -66,12 +88,12 @@ Sans ces clés, l'agent fonctionne avec LinkedIn uniquement.
    git remote add origin https://github.com/<vous>/<depot>.git && git push -u origin main
    ```
 3. Sur GitHub, allez dans **Settings → Secrets and variables → Actions → New repository secret**
-   et ajoutez `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, ainsi que `ADZUNA_APP_ID`,
-   `ADZUNA_APP_KEY` et `JOOBLE_API_KEY` si vous les avez.
+   et ajoutez `TELEGRAM_BOT_TOKEN` et `TELEGRAM_CHAT_ID`, ainsi que `ADZUNA_APP_ID`,
+   `ADZUNA_APP_KEY` et les `JOOBLE_API_KEY_<PAYS>` si vous les avez.
 4. Allez dans l'onglet **Actions**, activez les workflows si GitHub le demande, puis ouvrez
    **Job alerts → Run workflow** pour un premier passage manuel.
 
-L'agent tourne ensuite automatiquement toutes les 30 minutes.
+L'agent tourne ensuite automatiquement toutes les heures.
 
 ## 4. Alternative : lancer sur votre PC Windows
 
@@ -85,10 +107,10 @@ Copiez `.env.example` en `.env`, remplissez vos clés, puis vérifiez la connexi
 python job_alert.py --test
 ```
 
-Pour une exécution automatique toutes les 30 minutes (Planificateur de tâches Windows) :
+Pour une exécution automatique toutes les heures (Planificateur de tâches Windows) :
 
 ```bash
-schtasks /Create /SC MINUTE /MO 30 /TN "JobAlert" /TR "python C:\chemin\vers\job-alert-agent\job_alert.py"
+schtasks /Create /SC HOURLY /TN "JobAlert" /TR "python C:\Users\natha\Documents\job-alert-agent\job_alert.py"
 ```
 
 ## Commandes utiles
@@ -111,18 +133,27 @@ schtasks /Create /SC MINUTE /MO 30 /TN "JobAlert" /TR "python C:\chemin\vers\job
 
 ## Bon à savoir
 
-- **Délai** : c'est un système de surveillance périodique, pas du temps réel. Comptez 30 à 45 min
+- **Délai** : c'est un système de surveillance périodique, pas du temps réel. Comptez 1 h à 1 h 15
   entre la publication et l'alerte, car GitHub décale parfois les exécutions planifiées.
-  On peut descendre à 15 min dans `.github/workflows/job-alert.yml` (`*/15`),
-  mais on s'expose davantage au blocage par LinkedIn.
-- **Blocage LinkedIn** : LinkedIn limite parfois les requêtes venant des serveurs GitHub. Si aucune
-  source ne répond, l'agent vous envoie un avertissement Telegram (au maximum une fois par 24 h).
-  Si cela se répète, lancez l'agent depuis votre PC (section 4).
+  Accélérer le rythme dans `.github/workflows/job-alert.yml` expose davantage au blocage par LinkedIn :
+  c'est précisément ce qui s'est produit avec un passage toutes les 30 minutes.
+- **Limites de LinkedIn** : depuis fin 2026, LinkedIn coupe après quelques dizaines de requêtes, y
+  compris depuis une connexion personnelle, et plus vite encore depuis les serveurs de GitHub.
+  Trois réglages atténuent ce problème :
+  - l'ordre des villes **tourne à chaque passage** (`rotation` dans `seen_jobs.json`), pour qu'aucune
+    ville ne soit systématiquement sacrifiée quand LinkedIn coupe en cours de route ;
+  - les requêtes sont espacées d'environ 6 à 11 s (`LINKEDIN_PAUSE_SECONDS` pour ajuster) ;
+  - `max_description_fetches` limite le nombre d'annonces lues en entier par passage ; les offres
+    non évaluées le sont au passage suivant.
+
+  Si l'agent vous avertit malgré tout, la vraie solution est d'**ajouter une clé Adzuna ou Jooble** :
+  ce sont des API officielles, prévues pour cet usage, qui prennent le relais quand LinkedIn coupe.
+  À défaut, lancez l'agent depuis votre PC (section 4), où LinkedIn est plus tolérant.
 - **Anti-doublons** : chaque offre, retenue ou écartée, est mémorisée 30 jours (`seen_jobs.json`).
   Elle n'est donc évaluée qu'une fois, et une annonce n'est lue en entier qu'une seule fois. Une même
   offre repérée à la fois sur LinkedIn et sur Jooble n'est envoyée qu'une fois.
 - **Inactivité** : GitHub met en pause les tâches planifiées d'un dépôt public sans activité depuis
   60 jours. Il suffit alors de cliquer sur « Enable workflow » dans l'onglet Actions.
 - La lecture automatisée des pages LinkedIn n'est pas prévue par leurs conditions d'utilisation.
-  L'agent reste volontairement discret (quelques requêtes espacées toutes les 30 min, sans compte),
+  L'agent reste volontairement discret (quelques requêtes espacées, une fois par heure, sans compte),
   mais il est destiné à un usage personnel.

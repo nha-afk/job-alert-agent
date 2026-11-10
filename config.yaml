@@ -6,13 +6,14 @@
 # ------------------------------------------------------------------
 
 # Ne garder que les offres publiées il y a moins de N heures.
-# L'agent tourne toutes les ~30 min ; une fenêtre de 3 h absorbe les retards
-# de GitHub Actions. Les doublons sont éliminés grâce à seen_jobs.json.
-max_age_hours: 3
+# L'agent tourne toutes les heures, mais l'ordre des villes tourne : si LinkedIn coupe
+# tôt dans un passage, une ville donnée peut n'être revue que 5 h plus tard. Une fenêtre
+# de 8 h couvre ce cas sans rien manquer ; les doublons sont éliminés par seen_jobs.json.
+max_age_hours: 8
 
 # Nombre maximal de descriptions LinkedIn lues par passage (pour les intitulés ambigus).
 # Les offres non évaluées faute de quota le seront au passage suivant.
-max_description_fetches: 30
+max_description_fetches: 12
 
 # Recherches lancées pour chaque ville.
 # Sur LinkedIn, elles sont combinées en une seule requête "A" OR "B" OR ...
@@ -25,11 +26,22 @@ search_terms:
   - "project finance"
   - "real assets"
 
+# Adzuna compte chaque appel dans son quota gratuit : une requête par terme et par pays.
+# Cette liste courte limite la consommation (3 termes x 3 pays x 24 passages ≈ 220 appels/jour).
+# Adzuna ne couvre que les pays ayant un code `adzuna` ci-dessous ; les autres villes
+# restent couvertes par LinkedIn.
+adzuna_terms:
+  - "infrastructure investment"
+  - "infrastructure fund"
+  - "project finance"
+
 # Villes surveillées.
 #   extra_terms : recherches supplémentaires propres à la ville (ex. intitulés en français)
 #   linkedin : libellé de lieu reconnu par LinkedIn
 #   adzuna   : code pays Adzuna (gb, fr, za… ; laisser vide si non couvert)
 #   jooble   : libellé de lieu envoyé à Jooble
+#   jooble_domain : sous-domaine Jooble du pays (fr.jooble.org -> "fr"). Jooble délivre une
+#                   clé par pays : elle se met dans JOOBLE_API_KEY_<DOMAINE en majuscules>.
 locations:
   - name: Paris
     extra_terms: ["investissement infrastructure", "chargé d'investissement infrastructure", "financement de projets"]
@@ -37,23 +49,28 @@ locations:
     adzuna: fr
     adzuna_where: "Paris"
     jooble: "Paris, France"
+    jooble_domain: fr
   - name: Londres
     linkedin: "London, England, United Kingdom"
     adzuna: gb
     adzuna_where: "London"
     jooble: "London, United Kingdom"
+    jooble_domain: uk
   - name: Casablanca
     extra_terms: ["investissement infrastructure", "chargé d'investissement infrastructure", "financement de projets"]
     linkedin: "Casablanca, Morocco"
     jooble: "Casablanca, Morocco"
+    jooble_domain: ma
   - name: Lagos
     linkedin: "Lagos, Nigeria"
     jooble: "Lagos, Nigeria"
+    jooble_domain: ng
   - name: Cape Town
     linkedin: "Cape Town, Western Cape, South Africa"
     adzuna: za
     adzuna_where: "Cape Town"
     jooble: "Cape Town, South Africa"
+    jooble_domain: za
 
 # ------------------------------------------------------------------
 # Filtre (expressions régulières, insensibles à la casse)

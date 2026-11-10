@@ -2,7 +2,9 @@ name: Job alerts
 
 on:
   schedule:
-    - cron: "*/30 * * * *" # toutes les 30 minutes (GitHub peut retarder de quelques minutes)
+    # Toutes les heures. LinkedIn a durci ses limites : à 30 min, il coupait en cours de
+    # passage. GitHub peut retarder une exécution de quelques minutes.
+    - cron: "7 * * * *"
   workflow_dispatch: # bouton "Run workflow" pour lancer à la main
 
 concurrency:
@@ -37,7 +39,12 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           ADZUNA_APP_ID: ${{ secrets.ADZUNA_APP_ID }}
           ADZUNA_APP_KEY: ${{ secrets.ADZUNA_APP_KEY }}
-          JOOBLE_API_KEY: ${{ secrets.JOOBLE_API_KEY }}
+          # Jooble délivre une clé par pays ; n'ajoutez que les Secrets dont vous disposez.
+          JOOBLE_API_KEY_FR: ${{ secrets.JOOBLE_API_KEY_FR }}
+          JOOBLE_API_KEY_UK: ${{ secrets.JOOBLE_API_KEY_UK }}
+          JOOBLE_API_KEY_MA: ${{ secrets.JOOBLE_API_KEY_MA }}
+          JOOBLE_API_KEY_NG: ${{ secrets.JOOBLE_API_KEY_NG }}
+          JOOBLE_API_KEY_ZA: ${{ secrets.JOOBLE_API_KEY_ZA }}
         run: python job_alert.py
 
       - name: Save seen jobs
